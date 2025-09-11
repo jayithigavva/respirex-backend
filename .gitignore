@@ -109,7 +109,8 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Model files (uncomment if you want to exclude large model files)
-# *.pth
-# *.pkl
-# *.h5
+# Model files (exclude large model files from git)
+*.pth
+*.pkl
+*.h5
+models/disease_classifier.pth
