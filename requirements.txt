@@ -2,6 +2,7 @@
 # Minimal working setup for Render deployment
 fastapi
 uvicorn[standard]
+gunicorn
 torch
 torchaudio
 librosa
