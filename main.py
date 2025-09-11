@@ -1,6 +1,6 @@
 """
 FastAPI backend for Respiratory Disease Classification
-Supports both Disease Classification and Annotation Models
+Updated to use trained models
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -8,14 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import librosa
 import numpy as np
-import soundfile as sf
+import pandas as pd
 import io
 import json
-from typing import Dict, List, Any
 import logging
+import os
+from typing import Dict, List, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Respiratory Disease Classification API",
-    description="API for classifying respiratory diseases and detecting anomalies from audio files",
-    version="1.0.0"
+    description="API for classifying respiratory diseases using trained models",
+    version="2.0.0"
 )
 
 # Add CORS middleware
@@ -39,7 +39,6 @@ app.add_middleware(
 # Model configuration
 TARGET_SR = 22050
 DURATION = 10.0
-N_MFCC = 13
 N_MELS = 128
 HOP_LENGTH = 512
 
@@ -49,133 +48,57 @@ DISEASE_CLASSES = [
     'Healthy', 'LRTI', 'Pneumonia', 'URTI'
 ]
 
-# Event classes for annotation model
-EVENT_CLASSES = ['Normal', 'Crackle', 'Wheeze', 'Both']
+# Global variables for models
+model1 = None
+model2 = None
+device = None
 
-class RespiratoryCNN(nn.Module):
+# Model 1: Disease Classifier
+class RespiratoryDiseaseClassifier(nn.Module):
     """
-    CNN architecture for respiratory disease classification.
+    CNN model for respiratory disease classification.
     """
     
     def __init__(self, 
                  input_height: int = 128,
                  input_width: int = 431,
-                 num_classes: int = 8,
+                 num_disease_classes: int = 8,
                  dropout_rate: float = 0.3):
-        super(RespiratoryCNN, self).__init__()
+        super(RespiratoryDiseaseClassifier, self).__init__()
         
         self.input_height = input_height
         self.input_width = input_width
-        self.num_classes = num_classes
+        self.num_disease_classes = num_disease_classes
         
-        # Convolutional layers
+        # CNN encoder
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
-        self.pool1 = nn.MaxPool2d(2, 2)
+        self.pool1 = nn.MaxPool2d((2, 2))
         
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
-        self.pool2 = nn.MaxPool2d(2, 2)
+        self.pool2 = nn.MaxPool2d((2, 2))
         
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm2d(128)
-        self.pool3 = nn.MaxPool2d(2, 2)
+        self.pool3 = nn.MaxPool2d((2, 2))
         
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm2d(256)
-        self.pool4 = nn.MaxPool2d(2, 2)
-        
-        # Calculate flattened size
-        self.flattened_size = self._get_flattened_size()
-        
-        # Fully connected layers
-        self.fc1 = nn.Linear(self.flattened_size, 512)
-        self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(512, 256)
-        self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc3 = nn.Linear(256, num_classes)
-        
-    def _get_flattened_size(self):
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, 1, self.input_height, self.input_width)
-            x = self.pool1(torch.relu(self.bn1(self.conv1(dummy_input))))
-            x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
-            x = self.pool3(torch.relu(self.bn3(self.conv3(x))))
-            x = self.pool4(torch.relu(self.bn4(self.conv4(x))))
-            return x.numel()
-    
-    def forward(self, x):
-        # Convolutional layers
-        x = self.pool1(torch.relu(self.bn1(self.conv1(x))))
-        x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
-        x = self.pool3(torch.relu(self.bn3(self.conv3(x))))
-        x = self.pool4(torch.relu(self.bn4(self.conv4(x))))
-        
-        # Flatten
-        x = x.view(x.size(0), -1)
-        
-        # Fully connected layers
-        x = torch.relu(self.fc1(x))
-        x = self.dropout1(x)
-        x = torch.relu(self.fc2(x))
-        x = self.dropout2(x)
-        x = self.fc3(x)
-        
-        return x
-
-class MultiTaskRespiratoryModel(nn.Module):
-    """
-    Multi-task model for respiratory event annotation and disease classification.
-    """
-    
-    def __init__(self,
-                 input_height: int = 128,
-                 input_width: int = 431,
-                 num_event_classes: int = 4,
-                 num_disease_classes: int = 8,
-                 dropout_rate: float = 0.3):
-        super(MultiTaskRespiratoryModel, self).__init__()
-        
-        self.input_height = input_height
-        self.input_width = input_width
-        self.num_event_classes = num_event_classes
-        self.num_disease_classes = num_disease_classes
-        
-        # Shared CNN encoder
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.pool1 = nn.MaxPool2d((2, 1))  # Pool only in frequency dimension
-        
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.pool2 = nn.MaxPool2d((2, 1))
-        
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.pool3 = nn.MaxPool2d((2, 1))
+        self.pool4 = nn.MaxPool2d((2, 2))
         
         # Calculate CNN output size
         self.cnn_output_size = self._get_cnn_output_size()
         
-        # Temporal convolution for sequence modeling
-        self.temporal_conv = nn.Conv1d(self.cnn_output_size, 256, kernel_size=3, padding=1)
-        self.temporal_bn = nn.BatchNorm1d(256)
-        
-        # Task-specific heads
-        # Event detection head (sequence labeling)
-        self.event_head = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, num_event_classes)
-        )
-        
         # Disease classification head
         self.disease_head = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(self.cnn_output_size, 512),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            nn.Linear(128, num_disease_classes)
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(256, num_disease_classes)
         )
         
     def _get_cnn_output_size(self):
@@ -184,83 +107,119 @@ class MultiTaskRespiratoryModel(nn.Module):
             x = self.pool1(torch.relu(self.bn1(self.conv1(dummy_input))))
             x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
             x = self.pool3(torch.relu(self.bn3(self.conv3(x))))
-            return x.size(1) * x.size(2)
+            x = self.pool4(torch.relu(self.bn4(self.conv4(x))))
+            return x.size(1) * x.size(2) * x.size(3)
     
     def forward(self, x):
-        batch_size = x.size(0)
-        
         # CNN feature extraction
         x = self.pool1(torch.relu(self.bn1(self.conv1(x))))
         x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
         x = self.pool3(torch.relu(self.bn3(self.conv3(x))))
+        x = self.pool4(torch.relu(self.bn4(self.conv4(x))))
         
-        # Reshape for temporal convolution
-        x = x.view(batch_size, self.cnn_output_size, -1)
+        # Flatten for classification
+        x = x.view(x.size(0), -1)
         
-        # Temporal convolution
-        x = torch.relu(self.temporal_bn(self.temporal_conv(x)))
+        # Disease classification
+        disease_logits = self.disease_head(x)
         
-        # Transpose for task heads
-        x = x.transpose(1, 2)  # (batch_size, seq_len, features)
-        
-        # Event detection (sequence labeling)
-        event_logits = self.event_head(x)
-        
-        # Disease classification (global pooling)
-        global_features = torch.mean(x, dim=1)  # Average pooling over time
-        disease_logits = self.disease_head(global_features)
-        
-        return event_logits, disease_logits
+        return disease_logits
 
-# Global model variables
-disease_model = None
-annotation_model = None
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Model 2: Doctor-Assisted Annotation Model
+class DoctorAnnotationModel(nn.Module):
+    """
+    Pure annotation-based model for doctor-assisted disease prediction.
+    """
+    
+    def __init__(self, 
+                 annotation_dim: int = 100,
+                 num_disease_classes: int = 8,
+                 dropout_rate: float = 0.3):
+        super(DoctorAnnotationModel, self).__init__()
+        
+        self.annotation_dim = annotation_dim
+        self.num_disease_classes = num_disease_classes
+        
+        # Annotation feature encoder
+        self.annotation_encoder = nn.Sequential(
+            nn.Linear(annotation_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate)
+        )
+        
+        # Disease prediction head
+        self.disease_head = nn.Sequential(
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(32, num_disease_classes)
+        )
+        
+    def forward(self, annotation_features):
+        # Encode annotation features
+        annotation_encoded = self.annotation_encoder(annotation_features)
+        
+        # Predict disease
+        disease_logits = self.disease_head(annotation_encoded)
+        
+        return disease_logits
 
 def load_models():
-    """Load both trained models."""
-    global disease_model, annotation_model
+    """
+    Load the trained models.
+    """
+    global model1, model2, device
     
     try:
-        # Load Disease Classification Model
-        disease_model = RespiratoryCNN(
-            input_height=128,
-            input_width=431,
-            num_classes=len(DISEASE_CLASSES),
-            dropout_rate=0.3
-        )
-        disease_model.load_state_dict(torch.load('models/disease_classifier.pth', map_location=device))
-        disease_model.to(device)
-        disease_model.eval()
-        logger.info("Disease classification model loaded successfully")
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {device}")
         
-        # Load Annotation Model
-        annotation_model = MultiTaskRespiratoryModel(
-            input_height=128,
-            input_width=431,
-            num_event_classes=len(EVENT_CLASSES),
-            num_disease_classes=len(DISEASE_CLASSES),
-            dropout_rate=0.3
-        )
-        annotation_model.load_state_dict(torch.load('models/annotation_model.pth', map_location=device))
-        annotation_model.to(device)
-        annotation_model.eval()
-        logger.info("Annotation model loaded successfully")
+        # Load Model 1: Disease Classifier
+        model1_path = 'models/model1_disease_event_classifier.pth'
+        if os.path.exists(model1_path):
+            model1 = RespiratoryDiseaseClassifier(
+                input_height=128,
+                input_width=431,
+                num_disease_classes=8,
+                dropout_rate=0.3
+            ).to(device)
+            
+            model1.load_state_dict(torch.load(model1_path, map_location=device))
+            model1.eval()
+            logger.info("✅ Model 1 (Disease Classifier) loaded successfully")
+        else:
+            logger.warning(f"❌ Model 1 not found at {model1_path}")
         
-        return True
+        # Load Model 2: Doctor-Assisted Annotation Model
+        model2_path = 'models/model2_doctor_assisted.pth'
+        if os.path.exists(model2_path):
+            model2 = DoctorAnnotationModel(
+                annotation_dim=100,
+                num_disease_classes=8,
+                dropout_rate=0.3
+            ).to(device)
+            
+            model2.load_state_dict(torch.load(model2_path, map_location=device))
+            model2.eval()
+            logger.info("✅ Model 2 (Doctor-Assisted Annotation) loaded successfully")
+        else:
+            logger.warning(f"❌ Model 2 not found at {model2_path}")
+        
+        return model1 is not None, model2 is not None
+        
     except Exception as e:
         logger.error(f"Error loading models: {str(e)}")
-        return False
+        return False, False
 
 def preprocess_audio(audio_data: bytes) -> Dict[str, Any]:
     """
     Preprocess audio data for model inference.
-    
-    Args:
-        audio_data: Raw audio bytes
-        
-    Returns:
-        Dictionary containing processed features
     """
     try:
         # Load audio from bytes
@@ -276,14 +235,12 @@ def preprocess_audio(audio_data: bytes) -> Dict[str, Any]:
         elif len(audio) < target_length:
             audio = np.pad(audio, (0, target_length - len(audio)), mode='constant')
         
-        # Extract features
-        mfccs = librosa.feature.mfcc(y=audio, sr=TARGET_SR, n_mfcc=N_MFCC, hop_length=HOP_LENGTH)
+        # Extract mel spectrogram
         mel_spec = librosa.feature.melspectrogram(y=audio, sr=TARGET_SR, n_mels=N_MELS, hop_length=HOP_LENGTH)
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
         
         return {
             'audio': audio,
-            'mfccs': mfccs,
             'mel_spectrogram': mel_spec_db,
             'duration': DURATION,
             'sample_rate': TARGET_SR
@@ -293,172 +250,74 @@ def preprocess_audio(audio_data: bytes) -> Dict[str, Any]:
         logger.error(f"Error preprocessing audio: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Audio preprocessing failed: {str(e)}")
 
-def predict_disease(features: Dict[str, Any]) -> Dict[str, Any]:
+def create_annotation_features_from_csv(annotation_data: str) -> torch.Tensor:
     """
-    Predict disease from audio features using the disease classification model.
-    
-    Args:
-        features: Preprocessed audio features
-        
-    Returns:
-        Dictionary containing prediction results
+    Create annotation features from CSV data (for Model 2).
     """
-    global disease_model
-    
-    if disease_model is None:
-        raise HTTPException(status_code=500, detail="Disease model not loaded")
-    
     try:
-        # Prepare input tensor
-        mel_spec = features['mel_spectrogram']
-        mel_spec_tensor = torch.FloatTensor(mel_spec).unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-        mel_spec_tensor = mel_spec_tensor.to(device)
+        # Parse CSV data
+        lines = annotation_data.strip().split('\n')
+        annotations = []
         
-        # Run inference
-        with torch.no_grad():
-            outputs = disease_model(mel_spec_tensor)
-            probabilities = torch.softmax(outputs, dim=1)
-            confidence, predicted_class = torch.max(probabilities, 1)
-            
-        # Get results
-        predicted_disease = DISEASE_CLASSES[predicted_class.item()]
-        confidence_score = confidence.item()
-        
-        # Get all class probabilities
-        all_probabilities = probabilities.squeeze().cpu().numpy()
-        class_probabilities = {
-            DISEASE_CLASSES[i]: float(all_probabilities[i]) 
-            for i in range(len(DISEASE_CLASSES))
-        }
-        
-        return {
-            'predicted_disease': predicted_disease,
-            'confidence': confidence_score,
-            'class_probabilities': class_probabilities
-        }
-        
-    except Exception as e:
-        logger.error(f"Error during disease prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Disease prediction failed: {str(e)}")
-
-def predict_annotation(features: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Predict annotations and disease from audio features using the annotation model.
-    
-    Args:
-        features: Preprocessed audio features
-        
-    Returns:
-        Dictionary containing annotation results
-    """
-    global annotation_model
-    
-    if annotation_model is None:
-        raise HTTPException(status_code=500, detail="Annotation model not loaded")
-    
-    try:
-        # Prepare input tensor
-        mel_spec = features['mel_spectrogram']
-        mel_spec_tensor = torch.FloatTensor(mel_spec).unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-        mel_spec_tensor = mel_spec_tensor.to(device)
-        
-        # Run inference
-        with torch.no_grad():
-            event_logits, disease_logits = annotation_model(mel_spec_tensor)
-            
-            # Get disease prediction
-            disease_probabilities = torch.softmax(disease_logits, dim=1)
-            disease_confidence, predicted_disease_class = torch.max(disease_probabilities, 1)
-            
-            # Get event predictions
-            event_probabilities = torch.softmax(event_logits, dim=-1)
-            event_predictions = event_probabilities.argmax(dim=-1)
-            
-        # Process disease results
-        predicted_disease = DISEASE_CLASSES[predicted_disease_class.item()]
-        disease_confidence_score = disease_confidence.item()
-        
-        # Process event results
-        sequence_length = event_predictions.size(1)
-        frame_rate = TARGET_SR / HOP_LENGTH
-        
-        # Convert frame predictions to time segments
-        events = []
-        current_event = None
-        
-        for frame_idx in range(sequence_length):
-            event_class = event_predictions[0, frame_idx].item()
-            event_name = EVENT_CLASSES[event_class]
-            
-            if event_name != 'Normal':
-                current_time = frame_idx / frame_rate
-                
-                if current_event is None or current_event['label'] != event_name:
-                    # Start new event
-                    if current_event is not None:
-                        events.append(current_event)
-                    current_event = {
-                        'start': current_time,
-                        'end': current_time,
-                        'label': event_name.lower(),
-                        'confidence': float(event_probabilities[0, frame_idx, event_class])
-                    }
-                else:
-                    # Extend current event
-                    current_event['end'] = current_time
-                    current_event['confidence'] = max(current_event['confidence'], 
-                                                   float(event_probabilities[0, frame_idx, event_class]))
-            else:
-                # End current event
-                if current_event is not None:
-                    events.append(current_event)
-                    current_event = None
-        
-        # Add final event if exists
-        if current_event is not None:
-            events.append(current_event)
-        
-        # Filter events by minimum duration and confidence
-        filtered_events = []
-        for event in events:
-            duration = event['end'] - event['start']
-            if duration >= 0.1 and event['confidence'] >= 0.3:  # Minimum 100ms duration and 30% confidence
-                filtered_events.append({
-                    'start': round(event['start'], 2),
-                    'end': round(event['end'], 2),
-                    'label': event['label'],
-                    'confidence': round(event['confidence'], 3)
+        for line in lines[1:]:  # Skip header
+            parts = line.split(',')
+            if len(parts) >= 8:
+                start = float(parts[0])
+                end = float(parts[1])
+                crackles = int(parts[2])
+                wheezes = int(parts[3])
+                annotations.append({
+                    'start': start,
+                    'end': end,
+                    'crackles': crackles,
+                    'wheezes': wheezes
                 })
         
-        return {
-            'predicted_disease': predicted_disease,
-            'confidence': disease_confidence_score,
-            'events': filtered_events
-        }
+        # Create time bins (100 bins for 10 seconds)
+        num_bins = 100
+        bin_duration = 10.0 / num_bins
+        features = np.zeros(num_bins)
+        
+        # Process each annotation
+        for ann in annotations:
+            start_time = ann['start']
+            end_time = ann['end']
+            crackles = ann['crackles']
+            wheezes = ann['wheezes']
+            
+            # Convert to bin indices
+            start_bin = int(start_time / bin_duration)
+            end_bin = int(end_time / bin_duration)
+            
+            # Ensure bins are within range
+            start_bin = max(0, min(start_bin, num_bins - 1))
+            end_bin = max(0, min(end_bin, num_bins - 1))
+            
+            # Set features based on annotations
+            if crackles > 0:
+                features[start_bin:end_bin+1] += 1  # Crackle indicator
+            if wheezes > 0:
+                features[start_bin:end_bin+1] += 2  # Wheeze indicator
+        
+        return torch.FloatTensor(features)
         
     except Exception as e:
-        logger.error(f"Error during annotation prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Annotation prediction failed: {str(e)}")
+        logger.error(f"Error creating annotation features: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Annotation processing failed: {str(e)}")
 
-@app.on_event("startup")
-async def startup_event():
-    """Load models on startup."""
-    logger.info("Starting up Respiratory Disease Classification API...")
-    if not load_models():
-        logger.error("Failed to load models on startup")
-    else:
-        logger.info("API ready for predictions")
+# Load models on startup
+models_loaded = load_models()
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
         "message": "Respiratory Disease Classification API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "running",
         "models_loaded": {
-            "disease_classifier": disease_model is not None,
-            "annotation_model": annotation_model is not None
+            "model1_disease_classifier": models_loaded[0],
+            "model2_doctor_assisted": models_loaded[1]
         }
     }
 
@@ -468,8 +327,8 @@ async def health_check():
     return {
         "status": "healthy",
         "models_loaded": {
-            "disease_classifier": disease_model is not None,
-            "annotation_model": annotation_model is not None
+            "model1_disease_classifier": models_loaded[0],
+            "model2_doctor_assisted": models_loaded[1]
         },
         "device": str(device)
     }
@@ -477,7 +336,7 @@ async def health_check():
 @app.post("/predict_disease")
 async def predict_disease_endpoint(file: UploadFile = File(...)):
     """
-    Predict respiratory disease from uploaded audio file.
+    Predict respiratory disease from uploaded audio file using Model 1.
     
     Args:
         file: Audio file (.wav, .mp3, etc.)
@@ -486,6 +345,9 @@ async def predict_disease_endpoint(file: UploadFile = File(...)):
         JSON response with disease prediction
     """
     try:
+        if not models_loaded[0]:
+            raise HTTPException(status_code=503, detail="Model 1 not loaded")
+        
         # Validate file type
         if not file.content_type.startswith('audio/'):
             raise HTTPException(status_code=400, detail="File must be an audio file")
@@ -501,23 +363,36 @@ async def predict_disease_endpoint(file: UploadFile = File(...)):
         # Preprocess audio
         features = preprocess_audio(audio_data)
         
-        # Predict disease
-        prediction = predict_disease(features)
+        # Prepare input tensor
+        mel_spec_tensor = torch.FloatTensor(features['mel_spectrogram']).unsqueeze(0).unsqueeze(0).to(device)
+        
+        # Run inference
+        with torch.no_grad():
+            logits = model1(mel_spec_tensor)
+            probabilities = torch.softmax(logits, dim=1)
+            predicted_class = torch.argmax(probabilities, dim=1).item()
+            confidence = probabilities[0][predicted_class].item()
+        
+        # Create class probabilities dictionary
+        class_probabilities = {
+            DISEASE_CLASSES[i]: float(probabilities[0][i].item())
+            for i in range(len(DISEASE_CLASSES))
+        }
         
         # Prepare response
         response = {
             "success": True,
             "filename": file.filename,
-            "prediction": prediction['predicted_disease'],
-            "confidence": prediction['confidence'],
-            "class_probabilities": prediction['class_probabilities'],
+            "prediction": DISEASE_CLASSES[predicted_class],
+            "confidence": confidence,
+            "class_probabilities": class_probabilities,
             "audio_info": {
                 "duration": features['duration'],
                 "sample_rate": features['sample_rate']
             }
         }
         
-        logger.info(f"Disease prediction completed: {prediction['predicted_disease']} (confidence: {prediction['confidence']:.3f})")
+        logger.info(f"Disease prediction completed: {DISEASE_CLASSES[predicted_class]} (confidence: {confidence:.3f})")
         
         return JSONResponse(content=response)
         
@@ -530,47 +405,61 @@ async def predict_disease_endpoint(file: UploadFile = File(...)):
 @app.post("/predict_annotation")
 async def predict_annotation_endpoint(file: UploadFile = File(...)):
     """
-    Predict respiratory events and disease from uploaded audio file.
+    Predict disease from doctor's annotation data using Model 2.
     
     Args:
-        file: Audio file (.wav, .mp3, etc.)
+        file: CSV file with annotation data
         
     Returns:
-        JSON response with annotation results
+        JSON response with disease prediction
     """
     try:
+        if not models_loaded[1]:
+            raise HTTPException(status_code=503, detail="Model 2 not loaded")
+        
         # Validate file type
-        if not file.content_type.startswith('audio/'):
-            raise HTTPException(status_code=400, detail="File must be an audio file")
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(status_code=400, detail="File must be a CSV file")
         
         # Read file content
-        audio_data = await file.read()
+        annotation_data = await file.read()
         
-        if len(audio_data) == 0:
+        if len(annotation_data) == 0:
             raise HTTPException(status_code=400, detail="Empty file")
         
-        logger.info(f"Processing annotation prediction for: {file.filename}, size: {len(audio_data)} bytes")
+        logger.info(f"Processing annotation prediction for: {file.filename}, size: {len(annotation_data)} bytes")
         
-        # Preprocess audio
-        features = preprocess_audio(audio_data)
+        # Create annotation features
+        annotation_features = create_annotation_features_from_csv(annotation_data.decode('utf-8'))
+        annotation_tensor = annotation_features.unsqueeze(0).to(device)
         
-        # Predict annotations
-        prediction = predict_annotation(features)
+        # Run inference
+        with torch.no_grad():
+            logits = model2(annotation_tensor)
+            probabilities = torch.softmax(logits, dim=1)
+            predicted_class = torch.argmax(probabilities, dim=1).item()
+            confidence = probabilities[0][predicted_class].item()
+        
+        # Create class probabilities dictionary
+        class_probabilities = {
+            DISEASE_CLASSES[i]: float(probabilities[0][i].item())
+            for i in range(len(DISEASE_CLASSES))
+        }
         
         # Prepare response
         response = {
             "success": True,
             "filename": file.filename,
-            "disease": prediction['predicted_disease'],
-            "confidence": prediction['confidence'],
-            "events": prediction['events'],
-            "audio_info": {
-                "duration": features['duration'],
-                "sample_rate": features['sample_rate']
+            "disease": DISEASE_CLASSES[predicted_class],
+            "confidence": confidence,
+            "class_probabilities": class_probabilities,
+            "annotation_info": {
+                "num_annotations": len(annotation_data.decode('utf-8').split('\n')) - 1,
+                "model_type": "Doctor-Assisted Annotation Model"
             }
         }
         
-        logger.info(f"Annotation prediction completed: {prediction['predicted_disease']} with {len(prediction['events'])} events")
+        logger.info(f"Annotation prediction completed: {DISEASE_CLASSES[predicted_class]} (confidence: {confidence:.3f})")
         
         return JSONResponse(content=response)
         
