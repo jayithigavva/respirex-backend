@@ -1,5 +1,7 @@
 # FastAPI backend requirements for Respiratory Disease Classification
 # Compatible with Python 3.13.4 (Render default)
+setuptools>=65.0.0
+wheel>=0.38.0
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 torch==2.5.0
