@@ -277,15 +277,22 @@ async def predict_disease(file: UploadFile = File(...)):
         }
 
 @app.post("/predict_annotation")
-async def predict_annotation(file: UploadFile = File(...)):
-    """Predict disease from annotation data using Model 2"""
+async def predict_annotation(annotation_data: dict):
+    """Predict disease from doctor's button presses (crackles/wheezes)"""
     try:
-        # Read file
-        content = await file.read()
+        # Extract annotation data from request
+        events = annotation_data.get('events', [])
+        duration = annotation_data.get('duration', 10.0)
+        
+        if not events:
+            return {
+                "success": False,
+                "error": "No annotation events provided"
+            }
         
         if models_loaded[1] and model2 is not None:
-            # Use actual trained model for annotation
-            features = extract_features(content)
+            # Create features from doctor's annotations
+            features = create_annotation_features(events, duration)
             features_scaled = scaler2.transform(features.reshape(1, -1))
             
             probabilities = model2.predict_proba(features_scaled)[0]
@@ -295,44 +302,65 @@ async def predict_annotation(file: UploadFile = File(...)):
         else:
             # Fallback to dummy prediction
             import random
-            random.seed(len(content))
+            random.seed(len(str(events)))
             predicted_class = random.choice(DISEASE_CLASSES)
             confidence = random.uniform(0.80, 0.95)
         
-        # Generate realistic events based on prediction
-        import random
-        events = []
-        if predicted_class != "Healthy":
-            num_events = random.randint(1, 4)
-            for i in range(num_events):
-                start = random.uniform(0, 8)
-                end = start + random.uniform(0.5, 2)
-                event_type = random.choice(["wheeze", "crackle"])
-                events.append({
-                    "start": start,
-                    "end": end,
-                    "label": event_type,
-                    "confidence": random.uniform(0.7, 0.9)
-                })
-        
         return {
             "success": True,
-            "filename": file.filename,
             "disease": predicted_class,
             "confidence": float(confidence),
-            "events": events,
-            "audio_info": {
-                "duration": 10.0,
-                "sample_rate": 22050
+            "annotation_summary": {
+                "total_events": len(events),
+                "crackles": len([e for e in events if e.get('type') == 'crackle']),
+                "wheezes": len([e for e in events if e.get('type') == 'wheeze']),
+                "duration": duration
             }
         }
         
     except Exception as e:
         return {
             "success": False,
-            "error": str(e),
-            "filename": file.filename if file else "unknown"
+            "error": str(e)
         }
+
+def create_annotation_features(events: list, duration: float) -> np.ndarray:
+    """Create features from doctor's annotation events"""
+    try:
+        if not events:
+            return np.zeros(10, dtype=float)
+        
+        # Separate crackles and wheezes
+        crackles = [e for e in events if e.get('type') == 'crackle']
+        wheezes = [e for e in events if e.get('type') == 'wheeze']
+        
+        # Extract timestamps
+        crackle_times = [e.get('timestamp', 0) for e in crackles]
+        wheeze_times = [e.get('timestamp', 0) for e in wheezes]
+        
+        # Calculate durations
+        crackle_durations = [e.get('duration', 0.5) for e in crackles]
+        wheeze_durations = [e.get('duration', 0.5) for e in wheezes]
+        
+        # Create features
+        features = [
+            len(events),  # Total events
+            len(crackles),  # Total crackles
+            len(wheezes),  # Total wheezes
+            np.mean(crackle_times) if crackle_times else 0,  # Avg crackle time
+            np.mean(wheeze_times) if wheeze_times else 0,  # Avg wheeze time
+            np.mean(crackle_durations) if crackle_durations else 0,  # Avg crackle duration
+            np.mean(wheeze_durations) if wheeze_durations else 0,  # Avg wheeze duration
+            np.std(crackle_times) if len(crackle_times) > 1 else 0,  # Crackle time std
+            np.std(wheeze_times) if len(wheeze_times) > 1 else 0,  # Wheeze time std
+            duration  # Total duration
+        ]
+        
+        return np.array(features, dtype=float)
+        
+    except Exception as e:
+        print(f"Error creating annotation features: {str(e)}")
+        return np.zeros(10, dtype=float)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
