@@ -1,3 +1,10 @@
 fastapi
 uvicorn
+gunicorn
 python-multipart
+joblib
+numpy
+scipy
+librosa
+soundfile
+scikit-learn
