@@ -1,4 +1,5 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
@@ -10,6 +11,7 @@ import io
 from scipy.stats import kurtosis, skew
 from scipy.signal import find_peaks
 from sklearn.preprocessing import RobustScaler
+from pydantic import BaseModel
 
 app = FastAPI(title="Respirex API", version="1.0.0")
 
@@ -27,6 +29,16 @@ DISEASE_CLASSES = [
     "Healthy", "COPD", "Pneumonia", "Asthma", "Bronchiectasis", 
     "Bronchiolitis", "LRTI", "URTI"
 ]
+
+# Pydantic models for request validation
+class AnnotationEvent(BaseModel):
+    type: str  # 'crackle' or 'wheeze'
+    timestamp: float
+    duration: float
+
+class AnnotationRequest(BaseModel):
+    events: list[AnnotationEvent]
+    duration: float
 
 # Global variables for models
 model1 = None
@@ -277,12 +289,12 @@ async def predict_disease(file: UploadFile = File(...)):
         }
 
 @app.post("/predict_annotation")
-async def predict_annotation(annotation_data: dict):
+async def predict_annotation(annotation_data: AnnotationRequest):
     """Predict disease from doctor's button presses (crackles/wheezes)"""
     try:
         # Extract annotation data from request
-        events = annotation_data.get('events', [])
-        duration = annotation_data.get('duration', 10.0)
+        events = annotation_data.events
+        duration = annotation_data.duration
         
         if not events:
             return {
@@ -312,8 +324,8 @@ async def predict_annotation(annotation_data: dict):
             "confidence": float(confidence),
             "annotation_summary": {
                 "total_events": len(events),
-                "crackles": len([e for e in events if e.get('type') == 'crackle']),
-                "wheezes": len([e for e in events if e.get('type') == 'wheeze']),
+                "crackles": len([e for e in events if e.type == 'crackle']),
+                "wheezes": len([e for e in events if e.type == 'wheeze']),
                 "duration": duration
             }
         }
@@ -331,16 +343,16 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
             return np.zeros(10, dtype=float)
         
         # Separate crackles and wheezes
-        crackles = [e for e in events if e.get('type') == 'crackle']
-        wheezes = [e for e in events if e.get('type') == 'wheeze']
+        crackles = [e for e in events if e.type == 'crackle']
+        wheezes = [e for e in events if e.type == 'wheeze']
         
         # Extract timestamps
-        crackle_times = [e.get('timestamp', 0) for e in crackles]
-        wheeze_times = [e.get('timestamp', 0) for e in wheezes]
+        crackle_times = [e.timestamp for e in crackles]
+        wheeze_times = [e.timestamp for e in wheezes]
         
         # Calculate durations
-        crackle_durations = [e.get('duration', 0.5) for e in crackles]
-        wheeze_durations = [e.get('duration', 0.5) for e in wheezes]
+        crackle_durations = [e.duration for e in crackles]
+        wheeze_durations = [e.duration for e in wheezes]
         
         # Create features
         features = [
