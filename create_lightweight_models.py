@@ -111,16 +111,34 @@ def create_model1_lightweight():
     features_list = []
     labels_list = []
     
+    # Get all available audio files
+    audio_files = [f for f in os.listdir(audio_dir) if f.endswith('.wav')]
+    logger.info(f"Found {len(audio_files)} audio files")
+    
+    # Create mapping from patient_id to available audio files
+    patient_to_files = {}
+    for audio_file in audio_files:
+        patient_id = audio_file.split('_')[0]  # Extract patient ID from filename
+        if patient_id not in patient_to_files:
+            patient_to_files[patient_id] = []
+        patient_to_files[patient_id].append(audio_file)
+    
+    logger.info(f"Found audio files for {len(patient_to_files)} patients")
+    
     for idx, row in diagnosis_df.iterrows():
-        audio_file = f"{row['patient_id']}.wav"
-        audio_path = os.path.join(audio_dir, audio_file)
+        patient_id = str(row['patient_id'])
         
-        if os.path.exists(audio_path):
+        if patient_id in patient_to_files:
+            # Use the first available audio file for this patient
+            audio_file = patient_to_files[patient_id][0]
+            audio_path = os.path.join(audio_dir, audio_file)
+            
             features = extract_lightweight_features(audio_path)
             features_list.append(features)
             labels_list.append(row['disease'])
+            logger.info(f"Processed {audio_file} -> {row['disease']}")
         else:
-            logger.warning(f"Audio file not found: {audio_path}")
+            logger.warning(f"No audio files found for patient {patient_id}")
     
     if not features_list:
         logger.error("No audio files found!")
