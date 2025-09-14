@@ -56,6 +56,9 @@ def load_models():
     """Load the trained models"""
     global model1, model2, scaler1, scaler2, selector1, pca1
     
+    model1_loaded = False
+    model2_loaded = False
+    
     try:
         # Load Model 1 (High-Accuracy Disease Classifier)
         model1_path = 'models/model1_high_accuracy.joblib'
@@ -63,26 +66,33 @@ def load_models():
         selector1_path = 'models/selector1_high_accuracy.joblib'
         pca1_path = 'models/pca1_high_accuracy.joblib'
         
-        if os.path.exists(model1_path):
+        if all(os.path.exists(p) for p in [model1_path, scaler1_path, selector1_path, pca1_path]):
             model1 = joblib.load(model1_path)
             scaler1 = joblib.load(scaler1_path)
             selector1 = joblib.load(selector1_path)
             pca1 = joblib.load(pca1_path)
+            model1_loaded = True
             print("✅ Model 1 (High-Accuracy Disease Classifier) loaded successfully")
+        else:
+            print("⚠️ Model 1 files not found, will use dummy predictions")
         
         # Load Model 2 (Annotation Model)
         model2_path = 'models/model2_lightweight.joblib'
         scaler2_path = 'models/scaler2_lightweight.joblib'
         
-        if os.path.exists(model2_path):
+        if all(os.path.exists(p) for p in [model2_path, scaler2_path]):
             model2 = joblib.load(model2_path)
             scaler2 = joblib.load(scaler2_path)
+            model2_loaded = True
             print("✅ Model 2 (Annotation Model) loaded successfully")
+        else:
+            print("⚠️ Model 2 files not found, will use dummy predictions")
             
-        return model1 is not None, model2 is not None
+        return model1_loaded, model2_loaded
         
     except Exception as e:
         print(f"Error loading models: {str(e)}")
+        print("⚠️ Will use dummy predictions for both models")
         return False, False
 
 def extract_features(audio_data: bytes) -> np.ndarray:
