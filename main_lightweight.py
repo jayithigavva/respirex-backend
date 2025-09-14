@@ -16,7 +16,9 @@ import os
 from typing import Dict, List, Any
 import joblib
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from scipy.stats import kurtosis, skew
+from scipy.signal import find_peaks
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,24 +56,30 @@ model1 = None
 model2 = None
 scaler1 = None
 scaler2 = None
+selector1 = None
+pca1 = None
 
 def load_lightweight_models():
     """
     Load lightweight models optimized for free tier.
     """
-    global model1, model2, scaler1, scaler2
+    global model1, model2, scaler1, scaler2, selector1, pca1
     
     try:
-        # Try to load lightweight models (if they exist)
-        model1_path = 'models/model1_lightweight.joblib'
+        # Try to load high-accuracy models
+        model1_path = 'models/model1_high_accuracy.joblib'
         model2_path = 'models/model2_lightweight.joblib'
-        scaler1_path = 'models/scaler1_lightweight.joblib'
+        scaler1_path = 'models/scaler1_high_accuracy.joblib'
         scaler2_path = 'models/scaler2_lightweight.joblib'
+        selector1_path = 'models/selector1_high_accuracy.joblib'
+        pca1_path = 'models/pca1_high_accuracy.joblib'
         
-        if os.path.exists(model1_path) and os.path.exists(scaler1_path):
+        if os.path.exists(model1_path) and os.path.exists(scaler1_path) and os.path.exists(selector1_path) and os.path.exists(pca1_path):
             model1 = joblib.load(model1_path)
             scaler1 = joblib.load(scaler1_path)
-            logger.info("✅ Model 1 (Lightweight Disease Classifier) loaded successfully")
+            selector1 = joblib.load(selector1_path)
+            pca1 = joblib.load(pca1_path)
+            logger.info("✅ Model 1 (High-Accuracy Disease Classifier) loaded successfully")
         else:
             logger.warning("❌ Model 1 not found, will use dummy predictions")
         
@@ -90,79 +98,187 @@ def load_lightweight_models():
 
 def extract_lightweight_features(audio_data: bytes) -> np.ndarray:
     """
-    Extract lightweight features from audio for free tier compatibility.
+    Extract advanced features from audio for high-accuracy model.
     """
     try:
         # Load audio from bytes
-        audio, sr = librosa.load(io.BytesIO(audio_data), sr=TARGET_SR)
+        audio, sr = librosa.load(io.BytesIO(audio_data), sr=TARGET_SR, duration=DURATION)
         
-        # Normalize
-        audio = audio / np.max(np.abs(audio)) if np.max(np.abs(audio)) > 0 else audio
+        # Advanced preprocessing
+        audio_trimmed, _ = librosa.effects.trim(audio, top_db=20)
+        audio_norm = librosa.util.normalize(audio_trimmed)
         
-        # Pad or truncate to target duration
+        # Pad or truncate to exactly 10 seconds
         target_length = int(DURATION * TARGET_SR)
-        if len(audio) > target_length:
-            audio = audio[:target_length]
-        elif len(audio) < target_length:
-            audio = np.pad(audio, (0, target_length - len(audio)), mode='constant')
+        if len(audio_norm) > target_length:
+            audio_norm = audio_norm[:target_length]
+        elif len(audio_norm) < target_length:
+            audio_norm = np.pad(audio_norm, (0, target_length - len(audio_norm)), mode='constant')
         
-        # Extract lightweight features
         features = []
         
-        # Basic audio features
+        # 1. Advanced time-domain features
         features.extend([
-            np.mean(audio),
-            np.std(audio),
-            np.max(audio),
-            np.min(audio),
-            np.median(audio)
+            np.mean(audio_norm),
+            np.std(audio_norm),
+            np.max(audio_norm),
+            np.min(audio_norm),
+            np.median(audio_norm),
+            np.var(audio_norm),
+            np.sqrt(np.mean(audio_norm**2)),  # RMS
+            kurtosis(audio_norm),
+            skew(audio_norm),
+            np.percentile(audio_norm, 25),
+            np.percentile(audio_norm, 75),
+            np.percentile(audio_norm, 90),
+            np.percentile(audio_norm, 95),
         ])
         
-        # Spectral features
-        mfccs = librosa.feature.mfcc(y=audio, sr=TARGET_SR, n_mfcc=13)
-        features.extend([
-            np.mean(mfccs),
-            np.std(mfccs),
-            np.max(mfccs),
-            np.min(mfccs)
-        ])
+        # 2. Advanced MFCC features
+        mfccs = librosa.feature.mfcc(y=audio_norm, sr=sr, n_mfcc=20, hop_length=HOP_LENGTH)
+        for i in range(20):
+            features.extend([
+                float(np.mean(mfccs[i])),
+                float(np.std(mfccs[i])),
+                float(np.max(mfccs[i])),
+                float(np.min(mfccs[i])),
+                float(np.median(mfccs[i])),
+            ])
         
-        # Mel spectrogram features
-        mel_spec = librosa.feature.melspectrogram(y=audio, sr=TARGET_SR, n_mels=N_MELS)
+        # 3. Delta and delta-delta MFCCs
+        delta_mfccs = librosa.feature.delta(mfccs)
+        delta2_mfccs = librosa.feature.delta(mfccs, order=2)
+        
+        for i in range(20):
+            features.extend([
+                float(np.mean(delta_mfccs[i])),
+                float(np.std(delta_mfccs[i])),
+                float(np.mean(delta2_mfccs[i])),
+                float(np.std(delta2_mfccs[i])),
+            ])
+        
+        # 4. Mel spectrogram features
+        mel_spec = librosa.feature.melspectrogram(y=audio_norm, sr=sr, n_mels=N_MELS, hop_length=HOP_LENGTH)
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
         features.extend([
-            np.mean(mel_spec_db),
-            np.std(mel_spec_db),
-            np.max(mel_spec_db),
-            np.min(mel_spec_db)
+            float(np.mean(mel_spec_db)),
+            float(np.std(mel_spec_db)),
+            float(np.max(mel_spec_db)),
+            float(np.min(mel_spec_db)),
+            float(np.median(mel_spec_db)),
+            float(np.percentile(mel_spec_db, 25)),
+            float(np.percentile(mel_spec_db, 75)),
         ])
         
+        # 5. Spectral features
         # Zero crossing rate
-        zcr = librosa.feature.zero_crossing_rate(audio)
+        zcr = librosa.feature.zero_crossing_rate(audio_norm)
         features.extend([
-            np.mean(zcr),
-            np.std(zcr)
+            float(np.mean(zcr)),
+            float(np.std(zcr)),
+            float(np.max(zcr)),
+            float(np.min(zcr)),
         ])
         
         # Spectral centroid
-        spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=TARGET_SR)
+        spectral_centroids = librosa.feature.spectral_centroid(y=audio_norm, sr=sr)
         features.extend([
-            np.mean(spectral_centroids),
-            np.std(spectral_centroids)
+            float(np.mean(spectral_centroids)),
+            float(np.std(spectral_centroids)),
+            float(np.max(spectral_centroids)),
+            float(np.min(spectral_centroids)),
         ])
         
         # Spectral rolloff
-        spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=TARGET_SR)
+        spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_norm, sr=sr)
         features.extend([
-            np.mean(spectral_rolloff),
-            np.std(spectral_rolloff)
+            float(np.mean(spectral_rolloff)),
+            float(np.std(spectral_rolloff)),
+            float(np.max(spectral_rolloff)),
+            float(np.min(spectral_rolloff)),
         ])
         
-        return np.array(features).reshape(1, -1)
+        # Spectral bandwidth
+        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=audio_norm, sr=sr)
+        features.extend([
+            float(np.mean(spectral_bandwidth)),
+            float(np.std(spectral_bandwidth)),
+            float(np.max(spectral_bandwidth)),
+            float(np.min(spectral_bandwidth)),
+        ])
+        
+        # Spectral flatness
+        spectral_flatness = librosa.feature.spectral_flatness(y=audio_norm)
+        features.extend([
+            float(np.mean(spectral_flatness)),
+            float(np.std(spectral_flatness)),
+        ])
+        
+        # 6. Tempo and rhythm features
+        tempo, _ = librosa.beat.beat_track(y=audio_norm, sr=sr)
+        features.append(float(tempo))
+        
+        # 7. Chroma features
+        chroma = librosa.feature.chroma_stft(y=audio_norm, sr=sr)
+        features.extend([
+            float(np.mean(chroma)),
+            float(np.std(chroma)),
+            float(np.max(chroma)),
+            float(np.min(chroma)),
+        ])
+        
+        # 8. Tonnetz features
+        tonnetz = librosa.feature.tonnetz(y=audio_norm, sr=sr)
+        features.extend([
+            float(np.mean(tonnetz)),
+            float(np.std(tonnetz)),
+            float(np.max(tonnetz)),
+            float(np.min(tonnetz)),
+        ])
+        
+        # 9. Spectral contrast
+        spectral_contrast = librosa.feature.spectral_contrast(y=audio_norm, sr=sr)
+        features.extend([
+            float(np.mean(spectral_contrast)),
+            float(np.std(spectral_contrast)),
+            float(np.max(spectral_contrast)),
+            float(np.min(spectral_contrast)),
+        ])
+        
+        # 10. Energy features
+        energy = librosa.feature.rms(y=audio_norm, frame_length=2048, hop_length=HOP_LENGTH)[0]
+        features.extend([
+            float(np.mean(energy)),
+            float(np.std(energy)),
+            float(np.max(energy)),
+            float(np.min(energy)),
+            float(np.median(energy)),
+        ])
+        
+        # 11. Advanced statistical features
+        # Peak detection
+        peaks, _ = find_peaks(audio_norm, height=np.std(audio_norm))
+        features.extend([
+            len(peaks),
+            float(np.mean(np.diff(peaks))) if len(peaks) > 1 else 0,
+            float(np.std(np.diff(peaks))) if len(peaks) > 1 else 0,
+        ])
+        
+        # 12. Frequency domain features
+        fft = np.fft.fft(audio_norm)
+        fft_magnitude = np.abs(fft)
+        features.extend([
+            float(np.mean(fft_magnitude)),
+            float(np.std(fft_magnitude)),
+            float(np.max(fft_magnitude)),
+            float(np.argmax(fft_magnitude)),  # Dominant frequency
+        ])
+        
+        return np.array(features, dtype=float)
         
     except Exception as e:
         logger.error(f"Error extracting features: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Feature extraction failed: {str(e)}")
+        return np.zeros(243, dtype=float)  # Return zero features if error
 
 def create_annotation_features_from_csv(annotation_data: str) -> np.ndarray:
     """
@@ -277,10 +393,12 @@ async def predict_disease_endpoint(file: UploadFile = File(...)):
         # Extract features
         features = extract_lightweight_features(audio_data)
         
-        if models_loaded[0] and scaler1 is not None:
-            # Use trained model
-            features_scaled = scaler1.transform(features)
-            probabilities = model1.predict_proba(features_scaled)[0]
+        if models_loaded[0] and scaler1 is not None and selector1 is not None and pca1 is not None:
+            # Use trained high-accuracy model with advanced preprocessing
+            features_scaled = scaler1.transform(features.reshape(1, -1))
+            features_selected = selector1.transform(features_scaled)
+            features_pca = pca1.transform(features_selected)
+            probabilities = model1.predict_proba(features_pca)[0]
             predicted_class = np.argmax(probabilities)
             confidence = probabilities[predicted_class]
         else:
