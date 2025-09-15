@@ -324,10 +324,14 @@ def predict_disease_internal(features: Dict[str, Any]) -> Dict[str, Any]:
 async def startup_event():
     """Load model on startup."""
     logger.info("Starting up Respiratory Disease Classification API...")
-    if not load_model():
-        logger.error("Failed to load model on startup")
-    else:
-        logger.info("API ready for predictions")
+    try:
+        if load_model():
+            logger.info("API ready for predictions")
+        else:
+            logger.warning("Model loading failed, but API is still available")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+        logger.info("API starting without model (will load on first request)")
 
 @app.get("/")
 async def root():
@@ -344,7 +348,7 @@ async def health_check():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "device": str(device)
+        "device": str(device) if 'device' in globals() else "unknown"
     }
 
 @app.post("/predict_disease")
