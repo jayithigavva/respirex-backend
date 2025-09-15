@@ -335,10 +335,8 @@ async def startup_event():
     """Load model on startup."""
     logger.info("Starting up Respiratory Disease Classification API...")
     try:
-        if load_model():
-            logger.info("API ready for predictions")
-        else:
-            logger.warning("Model loading failed, but API is still available")
+        # Don't load model on startup to avoid deployment issues
+        logger.info("API ready - model will be loaded on first request")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         logger.info("API starting without model (will load on first request)")
