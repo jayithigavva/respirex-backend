@@ -124,8 +124,18 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def load_model():
     """Load the trained model."""
-    global model
+    global model, device
     try:
+        # Initialize device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {device}")
+        
+        # Check if model file exists
+        import os
+        if not os.path.exists('model.pth'):
+            logger.error("Model file 'model.pth' not found")
+            return False
+            
         model = RespiratoryCNN(
             input_height=128,
             input_width=431,
@@ -377,6 +387,12 @@ async def predict_disease(file: UploadFile = File(...)):
         
         # Preprocess audio
         features = preprocess_audio(audio_data)
+        
+        # Try to load model if not already loaded
+        if model is None:
+            logger.info("Model not loaded, attempting to load...")
+            if not load_model():
+                raise HTTPException(status_code=500, detail="Failed to load model")
         
         # Predict disease
         prediction = predict_disease_internal(features)
