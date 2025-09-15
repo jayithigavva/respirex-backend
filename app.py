@@ -272,7 +272,7 @@ def detect_anomalies(features: Dict[str, Any]) -> List[Dict[str, Any]]:
     
     return anomalies
 
-def predict_disease(features: Dict[str, Any]) -> Dict[str, Any]:
+def predict_disease_internal(features: Dict[str, Any]) -> Dict[str, Any]:
     """
     Predict disease from audio features.
     
@@ -347,8 +347,8 @@ async def health_check():
         "device": str(device)
     }
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+@app.post("/predict_disease")
+async def predict_disease(file: UploadFile = File(...)):
     """
     Predict respiratory disease from uploaded audio file.
     
@@ -375,7 +375,7 @@ async def predict(file: UploadFile = File(...)):
         features = preprocess_audio(audio_data)
         
         # Predict disease
-        prediction = predict_disease(features)
+        prediction = predict_disease_internal(features)
         
         # Detect anomalies
         anomalies = detect_anomalies(features)
@@ -406,6 +406,77 @@ async def predict(file: UploadFile = File(...)):
         logger.error(f"Unexpected error during prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@app.post("/predict_annotation")
+async def predict_annotation(data: dict):
+    """
+    Predict disease from annotation events.
+    
+    Args:
+        data: Dictionary containing events and duration
+        
+    Returns:
+        JSON response with prediction results
+    """
+    try:
+        events = data.get('events', [])
+        duration = data.get('duration', 0)
+        
+        if not events:
+            raise HTTPException(status_code=400, detail="No events provided")
+        
+        # Simple annotation-based prediction logic
+        # Count different event types
+        crackle_count = sum(1 for event in events if event['type'] == 'crackle')
+        wheeze_count = sum(1 for event in events if event['type'] == 'wheeze')
+        
+        # Simple rule-based prediction
+        if wheeze_count > crackle_count and wheeze_count > 2:
+            predicted_disease = "Asthma"
+            confidence = min(0.9, 0.6 + (wheeze_count * 0.1))
+        elif crackle_count > wheeze_count and crackle_count > 2:
+            predicted_disease = "Pneumonia"
+            confidence = min(0.9, 0.6 + (crackle_count * 0.1))
+        elif crackle_count > 0 and wheeze_count > 0:
+            predicted_disease = "COPD"
+            confidence = min(0.9, 0.7 + ((crackle_count + wheeze_count) * 0.05))
+        else:
+            predicted_disease = "Healthy"
+            confidence = 0.8
+        
+        # Format events for response
+        formatted_events = []
+        for event in events:
+            formatted_events.append({
+                'start': event['timestamp'],
+                'end': event['timestamp'] + event['duration'],
+                'label': event['type'],
+                'confidence': 0.8
+            })
+        
+        response = {
+            "success": True,
+            "filename": "annotation_data",
+            "disease": predicted_disease,
+            "confidence": confidence,
+            "events": formatted_events,
+            "audio_info": {
+                "duration": duration,
+                "sample_rate": 22050
+            }
+        }
+        
+        logger.info(f"Annotation prediction completed: {predicted_disease} (confidence: {confidence:.3f})")
+        
+        return JSONResponse(content=response)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during annotation prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
