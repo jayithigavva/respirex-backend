@@ -237,7 +237,7 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
     """Create features from doctor's annotation events"""
     try:
         if not events:
-            return np.zeros(10, dtype=float)
+            return np.zeros(11, dtype=float)
         
         # Separate crackles and wheezes
         crackles = [e for e in events if e.type == 'crackle']
@@ -251,7 +251,7 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
         crackle_durations = [e.duration for e in crackles]
         wheeze_durations = [e.duration for e in wheezes]
         
-        # Create features
+        # Create features (11 features to match scaler)
         features = [
             len(events),  # Total events
             len(crackles),  # Total crackles
@@ -262,14 +262,15 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
             np.mean(wheeze_durations) if wheeze_durations else 0,  # Avg wheeze duration
             np.std(crackle_times) if len(crackle_times) > 1 else 0,  # Crackle time std
             np.std(wheeze_times) if len(wheeze_times) > 1 else 0,  # Wheeze time std
-            duration  # Total duration
+            duration,  # Total duration
+            len(events) / duration if duration > 0 else 0  # Events per second
         ]
         
         return np.array(features, dtype=float)
         
     except Exception as e:
         logger.error(f"Error creating annotation features: {str(e)}")
-        return np.zeros(10, dtype=float)
+        return np.zeros(11, dtype=float)
 
 # Load models on startup
 models_loaded = load_models()
