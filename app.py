@@ -272,9 +272,8 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
         logger.error(f"Error creating annotation features: {str(e)}")
         return np.zeros(11, dtype=float)
 
-# Load models on startup - temporarily disabled
-# models_loaded = load_models()
-models_loaded = (False, False)
+# Load models on startup
+models_loaded = load_models()
 
 @app.get("/")
 async def root():
@@ -359,11 +358,21 @@ async def predict_annotation(annotation_data: AnnotationRequest):
                 "error": "No annotation events provided"
             }
         
-        # For now, use dummy prediction to ensure integration works
-        import random
-        random.seed(len(str(events)))
-        predicted_class = random.choice(DISEASE_CLASSES)
-        confidence = random.uniform(0.80, 0.95)
+        if models_loaded[1] and model2 is not None:
+            # Create features from doctor's annotations
+            features = create_annotation_features(events, duration)
+            features_scaled = scaler2.transform(features.reshape(1, -1))
+            
+            probabilities = model2.predict_proba(features_scaled)[0]
+            predicted_class_idx = np.argmax(probabilities)
+            predicted_class = DISEASE_CLASSES[predicted_class_idx]
+            confidence = probabilities[predicted_class_idx]
+        else:
+            # Fallback to dummy prediction
+            import random
+            random.seed(len(str(events)))
+            predicted_class = random.choice(DISEASE_CLASSES)
+            confidence = random.uniform(0.80, 0.95)
         
         return {
             "success": True,
