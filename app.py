@@ -134,18 +134,18 @@ def extract_features(audio_data: bytes) -> np.ndarray:
         
         # MFCC features
         mfccs = librosa.feature.mfcc(y=audio_norm, sr=TARGET_SR, n_mfcc=13)
-        features.extend(np.mean(mfccs, axis=1))
-        features.extend(np.std(mfccs, axis=1))
+        features.extend(np.mean(mfccs, axis=1).tolist())
+        features.extend(np.std(mfccs, axis=1).tolist())
         
         # Delta MFCCs
         delta_mfccs = librosa.feature.delta(mfccs)
-        features.extend(np.mean(delta_mfccs, axis=1))
-        features.extend(np.std(delta_mfccs, axis=1))
+        features.extend(np.mean(delta_mfccs, axis=1).tolist())
+        features.extend(np.std(delta_mfccs, axis=1).tolist())
         
         # Delta-delta MFCCs
         delta2_mfccs = librosa.feature.delta(mfccs, order=2)
-        features.extend(np.mean(delta2_mfccs, axis=1))
-        features.extend(np.std(delta2_mfccs, axis=1))
+        features.extend(np.mean(delta2_mfccs, axis=1).tolist())
+        features.extend(np.std(delta2_mfccs, axis=1).tolist())
         
         # Mel spectrogram features
         mel_spec = librosa.feature.melspectrogram(y=audio_norm, sr=TARGET_SR)
@@ -188,18 +188,18 @@ def extract_features(audio_data: bytes) -> np.ndarray:
         
         # Chroma features
         chroma = librosa.feature.chroma_stft(y=audio_norm, sr=TARGET_SR)
-        features.extend(np.mean(chroma, axis=1))
-        features.extend(np.std(chroma, axis=1))
+        features.extend(np.mean(chroma, axis=1).tolist())
+        features.extend(np.std(chroma, axis=1).tolist())
         
         # Tonnetz features
         tonnetz = librosa.feature.tonnetz(y=audio_norm, sr=TARGET_SR)
-        features.extend(np.mean(tonnetz, axis=1))
-        features.extend(np.std(tonnetz, axis=1))
+        features.extend(np.mean(tonnetz, axis=1).tolist())
+        features.extend(np.std(tonnetz, axis=1).tolist())
         
         # Spectral contrast
         contrast = librosa.feature.spectral_contrast(y=audio_norm, sr=TARGET_SR)
-        features.extend(np.mean(contrast, axis=1))
-        features.extend(np.std(contrast, axis=1))
+        features.extend(np.mean(contrast, axis=1).tolist())
+        features.extend(np.std(contrast, axis=1).tolist())
         
         # Energy
         energy = np.sum(audio_norm**2)
@@ -227,7 +227,14 @@ def extract_features(audio_data: bytes) -> np.ndarray:
             features.append(0.0)
         features = features[:243]
         
-        return np.array(features, dtype=float)
+        # Convert to numpy array and ensure proper shape
+        features_array = np.array(features, dtype=float)
+        
+        # Ensure it's a 1D array
+        if features_array.ndim > 1:
+            features_array = features_array.flatten()
+        
+        return features_array
         
     except Exception as e:
         logger.error(f"Error extracting features: {str(e)}")
