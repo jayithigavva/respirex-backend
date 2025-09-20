@@ -3,7 +3,7 @@ services:
     name: respirex-api-v6
     env: python
     plan: free
-    buildCommand: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     healthCheckPath: /health
     envVars:
