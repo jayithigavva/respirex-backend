@@ -280,7 +280,10 @@ def create_annotation_features(events: list, duration: float) -> np.ndarray:
         return np.zeros(11, dtype=float)
 
 # Load models on startup
+logger.info("Starting RespireX API...")
+logger.info(f"Environment PORT: {os.environ.get('PORT', 'Not set')}")
 models_loaded = load_models()
+logger.info(f"Models loaded: {models_loaded}")
 
 @app.get("/")
 async def root():
