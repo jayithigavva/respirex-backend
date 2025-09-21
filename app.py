@@ -288,12 +288,21 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "message": "Respirex API is running",
-        "models": "Both models loaded successfully",
-        "optimization": "Render Free Tier Compatible"
-    }
+    try:
+        logger.info("Health check endpoint called")
+        return {
+            "status": "healthy",
+            "message": "RespireX API is running",
+            "models": "Both models loaded successfully",
+            "optimization": "Railway Compatible",
+            "timestamp": "2025-01-21"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 @app.post("/predict_disease")
 async def predict_disease(file: UploadFile = File(...)):

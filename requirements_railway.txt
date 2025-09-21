@@ -11,3 +11,4 @@ scikit-learn==1.3.2
 pydantic==2.5.0
 # Additional dependencies for Railway
 gunicorn==21.2.0
+
