@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# Use specific Python 3.11 image with explicit version
+FROM python:3.11.9-slim
 
 WORKDIR /app
 
@@ -10,20 +11,23 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install build tools first
-RUN python -m pip install --upgrade pip
-RUN pip install --upgrade setuptools wheel
+# Force Python version check
+RUN python --version
 
-# Copy requirements first for better caching
+# Install build tools first with explicit versions
+RUN pip install --upgrade pip==23.3.1
+RUN pip install setuptools==68.2.2 wheel==0.41.2
+
+# Copy requirements
 COPY requirements_docker.txt requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies with no build isolation
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Expose port (Render will set this dynamically)
+# Expose port
 EXPOSE $PORT
 
 # Run the application
