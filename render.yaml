@@ -1,11 +1,10 @@
 services:
   - type: web
-    name: respirex-api-v20
+    name: respirex-api-v21
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn main:application --worker-class uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:$PORT
-
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
