@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: respirex-api-docker
+    name: respirex-api-docker-v2
     env: docker
     plan: free
     dockerfilePath: ./Dockerfile
@@ -8,3 +8,5 @@ services:
     envVars:
       - key: PORT
         value: 8000
+      - key: PYTHON_VERSION
+        value: 3.11.0
