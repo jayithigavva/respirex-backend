@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: respirex-api-ml
+    name: respirex-api-final
     env: python
     plan: free
-    buildCommand: python3.11 -m pip install --upgrade pip && python3.11 -m pip install -r requirements.txt
-    startCommand: python3.11 -m uvicorn app:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    startCommand: python -m uvicorn app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
