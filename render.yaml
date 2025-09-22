@@ -1,12 +1,13 @@
 services:
   - type: web
-    name: respirex-api-docker-v2
-    env: docker
+    name: respirex-api-simple-working
+    env: python
     plan: free
-    dockerfilePath: ./Dockerfile
+    buildCommand: pip install -r requirements_simple.txt
+    startCommand: uvicorn app_simple:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: 8000
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: PORT
+        value: 10000
