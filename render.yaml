@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: respirex-api-v11
+    name: respirex-api-v12
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
