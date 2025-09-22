@@ -1,5 +1,8 @@
 from app import app
 
+# Export the app for gunicorn
+application = app
+
 if __name__ == "__main__":
     import uvicorn
     import os
