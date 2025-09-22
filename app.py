@@ -82,8 +82,10 @@ def load_models():
 # Load models on startup
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting RespireX API...")
+    logger.info("Starting RespireX API on Render...")
+    logger.info(f"Environment PORT: {os.environ.get('PORT', 'Not set')}")
     load_models()
+    logger.info("Startup complete!")
 
 # Request models
 class AnnotationRequest(BaseModel):
@@ -214,7 +216,11 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "message": "API is running"}
+    return {
+        "status": "healthy", 
+        "message": "RespireX API is running on Render",
+        "models_loaded": model1 is not None and model2 is not None
+    }
 
 @app.post("/predict")
 async def predict_disease(file: UploadFile = File(...)):
