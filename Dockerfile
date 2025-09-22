@@ -10,12 +10,15 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements_render.txt .
+# Upgrade pip and install build tools first
+RUN python -m pip install --upgrade pip
+RUN pip install --upgrade setuptools wheel
 
-# Install Python dependencies with specific versions that work
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements_render.txt
+# Copy requirements first for better caching
+COPY requirements_docker.txt requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
