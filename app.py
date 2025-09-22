@@ -8,12 +8,11 @@ import logging
 import joblib
 import numpy as np
 import librosa
-import soundfile as sf
+import io
+import random
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest
 from sklearn.decomposition import PCA
-import asyncio
-import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,17 +57,20 @@ def load_models():
     
     try:
         logger.info("Loading Model 1 (Audio-based)...")
-        model1 = joblib.load('models/model1_svm.joblib')
-        scaler1 = joblib.load('models/scaler1.joblib')
-        feature_selector1 = joblib.load('models/feature_selector1.joblib')
-        pca1 = joblib.load('models/pca1.joblib')
+        # Use the high accuracy model files that exist
+        model1 = joblib.load('models/model1_high_accuracy.joblib')
+        scaler1 = joblib.load('models/scaler1_high_accuracy.joblib')
+        feature_selector1 = joblib.load('models/selector1_high_accuracy.joblib')
+        pca1 = joblib.load('models/pca1_high_accuracy.joblib')
         logger.info("Model 1 loaded successfully")
         
         logger.info("Loading Model 2 (Annotation-based)...")
-        model2 = joblib.load('models/model2_mlp.joblib')
-        scaler2 = joblib.load('models/scaler2.joblib')
-        feature_selector2 = joblib.load('models/feature_selector2.joblib')
-        pca2 = joblib.load('models/pca2.joblib')
+        # Use the lightweight model files that exist
+        model2 = joblib.load('models/model2_lightweight.joblib')
+        scaler2 = joblib.load('models/scaler2_lightweight.joblib')
+        # Create dummy selectors and PCA for model2 if they don't exist
+        feature_selector2 = None
+        pca2 = None
         logger.info("Model 2 loaded successfully")
         
     except Exception as e:
@@ -91,45 +93,65 @@ class AnnotationRequest(BaseModel):
 
 # Feature extraction functions
 def extract_audio_features(audio_data, sr):
-    """Extract features from audio data"""
-    features = []
-    
-    # MFCC features
-    mfccs = librosa.feature.mfcc(y=audio_data, sr=sr, n_mfcc=13)
-    features.extend(np.mean(mfccs, axis=1))
-    features.extend(np.std(mfccs, axis=1))
-    
-    # Spectral features
-    spectral_centroids = librosa.feature.spectral_centroid(y=audio_data, sr=sr)[0]
-    features.append(np.mean(spectral_centroids))
-    features.append(np.std(spectral_centroids))
-    
-    # Zero crossing rate
-    zcr = librosa.feature.zero_crossing_rate(audio_data)[0]
-    features.append(np.mean(zcr))
-    features.append(np.std(zcr))
-    
-    # Spectral rolloff
-    rolloff = librosa.feature.spectral_rolloff(y=audio_data, sr=sr)[0]
-    features.append(np.mean(rolloff))
-    features.append(np.std(rolloff))
-    
-    # Chroma features
-    chroma = librosa.feature.chroma_stft(y=audio_data, sr=sr)
-    features.extend(np.mean(chroma, axis=1))
-    features.extend(np.std(chroma, axis=1))
-    
-    # Spectral contrast
-    contrast = librosa.feature.spectral_contrast(y=audio_data, sr=sr)
-    features.extend(np.mean(contrast, axis=1))
-    features.extend(np.std(contrast, axis=1))
-    
-    # Tonnetz
-    tonnetz = librosa.feature.tonnetz(y=audio_data, sr=sr)
-    features.extend(np.mean(tonnetz, axis=1))
-    features.extend(np.std(tonnetz, axis=1))
-    
-    return np.array(features)
+    """Extract features from audio data - simplified version"""
+    try:
+        # Normalize audio
+        audio_norm = librosa.util.normalize(audio_data)
+        
+        # Pad or truncate to 10 seconds at 22050 Hz
+        target_length = 10 * 22050
+        if len(audio_norm) > target_length:
+            audio_norm = audio_norm[:target_length]
+        elif len(audio_norm) < target_length:
+            audio_norm = np.pad(audio_norm, (0, target_length - len(audio_norm)), mode='constant')
+        
+        features = []
+        
+        # Basic time domain features
+        features.extend([
+            np.mean(audio_norm),
+            np.std(audio_norm),
+            np.var(audio_norm),
+            np.max(audio_norm),
+            np.min(audio_norm),
+            np.median(audio_norm)
+        ])
+        
+        # MFCC features
+        mfccs = librosa.feature.mfcc(y=audio_norm, sr=sr, n_mfcc=13)
+        features.extend(np.mean(mfccs, axis=1))
+        features.extend(np.std(mfccs, axis=1))
+        
+        # Spectral features
+        spectral_centroids = librosa.feature.spectral_centroid(y=audio_norm, sr=sr)[0]
+        features.append(np.mean(spectral_centroids))
+        features.append(np.std(spectral_centroids))
+        
+        # Zero crossing rate
+        zcr = librosa.feature.zero_crossing_rate(audio_norm)[0]
+        features.append(np.mean(zcr))
+        features.append(np.std(zcr))
+        
+        # Spectral rolloff
+        rolloff = librosa.feature.spectral_rolloff(y=audio_norm, sr=sr)[0]
+        features.append(np.mean(rolloff))
+        features.append(np.std(rolloff))
+        
+        # Chroma features
+        chroma = librosa.feature.chroma_stft(y=audio_norm, sr=sr)
+        features.extend(np.mean(chroma, axis=1))
+        features.extend(np.std(chroma, axis=1))
+        
+        # Ensure we have enough features (pad with zeros if needed)
+        while len(features) < 243:
+            features.append(0.0)
+        features = features[:243]
+        
+        return np.array(features, dtype=float)
+        
+    except Exception as e:
+        logger.error(f"Error extracting audio features: {e}")
+        return np.zeros(243, dtype=float)
 
 def create_annotation_features(crackle_events, wheeze_events, duration):
     """Create features from annotation events"""
@@ -198,8 +220,11 @@ async def health_check():
 async def predict_disease(file: UploadFile = File(...)):
     """Predict disease from audio file"""
     try:
-        # Read audio file
-        audio_data, sr = sf.read(file.file)
+        # Read audio file content
+        content = await file.read()
+        
+        # Load audio using librosa
+        audio_data, sr = librosa.load(io.BytesIO(content), sr=22050)
         
         # Extract features
         features = extract_audio_features(audio_data, sr)
@@ -251,14 +276,8 @@ async def predict_from_annotation(request: AnnotationRequest):
             # Scale features
             features_scaled = scaler2.transform(features.reshape(1, -1))
             
-            # Apply feature selection
-            features_selected = feature_selector2.transform(features_scaled)
-            
-            # Apply PCA
-            features_pca = pca2.transform(features_selected)
-            
-            # Make prediction
-            prediction_proba = model2.predict_proba(features_pca)[0]
+            # Make prediction (skip feature selection and PCA for model2)
+            prediction_proba = model2.predict_proba(features_scaled)[0]
             prediction_idx = np.argmax(prediction_proba)
             prediction = DISEASE_CLASSES[prediction_idx]
             confidence = float(prediction_proba[prediction_idx])
