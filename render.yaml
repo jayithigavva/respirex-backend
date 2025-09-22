@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: respirex-api-v6
+    name: respirex-api-v8
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
