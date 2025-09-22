@@ -5,7 +5,6 @@ from typing import List
 import uvicorn
 import os
 import random
-import asyncio
 
 app = FastAPI(
     title="RespireX API",
